@@ -1,0 +1,108 @@
+
+/**
+ * ESP8266 Modbus to HTTP API Bridge
+ * This code runs on an ESP8266 to read Modbus data from sensors and expose it via HTTP API
+ */
+
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ModbusMaster.h>
+#include <ArduinoJson.h>
+
+// Wi-Fi credentials
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Web server on port 80
+ESP8266WebServer server(80);
+
+// Modbus instance
+ModbusMaster modbus;
+
+// Modbus device ID (slave address)
+#define MODBUS_SLAVE_ID 1
+
+// Serial port for Modbus communication
+#define MODBUS_SERIAL Serial1
+
+// CORS headers for web requests
+void setCorsHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+// Initialize the connection to Modbus devices
+void setupModbus() {
+  // Set up Serial1 for Modbus communication (use appropriate pins)
+  MODBUS_SERIAL.begin(9600);
+  
+  // Initialize Modbus communication
+  modbus.begin(MODBUS_SLAVE_ID, MODBUS_SERIAL);
+}
+
+// Read Modbus registers and return values
+void handleModbusData() {
+  setCorsHeaders();
+  
+  // Create JSON response
+  StaticJsonDocument<512> doc;
+  
+  // Read first 9 registers (for 9 silos)
+  for (int i = 1; i <= 9; i++) {
+    uint8_t result = modbus.readHoldingRegisters(i, 1);
+    
+    if (result == modbus.ku8MBSuccess) {
+      // Register values are in centimeters - silo empty space
+      doc["reg" + String(i)] = modbus.getResponseBuffer(0);
+    } else {
+      // Error reading register, set to 0 (full silo)
+      doc["reg" + String(i)] = 0;
+    }
+  }
+  
+  // Convert JSON document to string
+  String jsonResponse;
+  serializeJson(doc, jsonResponse);
+  
+  // Send response
+  server.send(200, "application/json", jsonResponse);
+}
+
+// Handle preflight CORS requests
+void handleCors() {
+  setCorsHeaders();
+  server.send(204);
+}
+
+void setup() {
+  // Start serial for debugging
+  Serial.begin(115200);
+  
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("");
+  Serial.print("Connected to WiFi. IP address: ");
+  Serial.println(WiFi.localIP());
+  
+  // Setup Modbus
+  setupModbus();
+  
+  // API endpoints
+  server.on("/api/modbusData", HTTP_GET, handleModbusData);
+  server.on("/api/modbusData", HTTP_OPTIONS, handleCors);
+  
+  // Start server
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  // Handle client requests
+  server.handleClient();
+}
